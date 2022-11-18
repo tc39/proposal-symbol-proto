@@ -1,13 +1,15 @@
 # Prototype Pollution Mitigation / Symbol.proto
 
 **Authors**: Santiago Díaz (Google), Jun Kokatsu <@shhnjk> (Google)
+
 **Champion**: Shu-yu Guo <@syg> (Google)
+
 **Stage**: 0
 
 # TOC
 
 1. [Problem and motivation](#problem-and-motivation)
-1. [Proposal overview](#overview)
+1. [Proposal overview](#proposal-overview)
 1. [Secure mode](#secure-mode)
 1. [New symbols](#new-symbols)
 1. [Adoption considerations](#adoption-considerations)
@@ -169,7 +171,7 @@ As JS engines and browsers are able to refactor applications on the fly to make 
 
 A benefit of implementing this proposal on the browser (i.e. automatic refactoring) is that the proposed symbols don't need to be exposed to developers, making them effectively unutterable.
 
-## Need to support opting out of secure mode?
+## Need for supporting opting out of secure mode?
 
 We expect the majority of codebases to be able to opt into secure mode without any code changes, since dynamic modifications to prototypes are not common. If this proposal is implemented without automatic refactoring, a small percentage of codebases will need to be refactored to be compatible with secure mode, by using one of the symbols above.
 
