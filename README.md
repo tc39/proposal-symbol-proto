@@ -1,8 +1,8 @@
 # Prototype Pollution Mitigation / Symbol.proto
 
-**Authors**: Santiago Díaz (Google), Jun Kokatsu <@shhnjk> (Google)
+**Authors**: Santiago Díaz (Google), [Jun Kokatsu](https://github.com/shhnjk) (Google)
 
-**Champion**: Shu-yu Guo <@syg> (Google)
+**Champion**: Shu-yu Guo (Google)
 
 **Stage**: 0
 
