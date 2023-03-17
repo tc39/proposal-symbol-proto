@@ -1,3 +1,4 @@
+
 # Prototype Pollution Mitigation / Symbol.proto
 
 **Authors**: [Santiago Díaz](https://github.com/salcho) (Google), [Jun Kokatsu](https://github.com/shhnjk) (Google)
@@ -9,10 +10,11 @@
 # TOC
 
 1. [Problem and motivation](#problem-and-motivation)
-1. [Proposal overview](#proposal-overview)
-1. [Secure mode](#secure-mode)
-1. [New symbols](#new-symbols)
-1. [Adoption considerations](#adoption-considerations)
+2. [Proposal overview](#proposal-overview)
+3. [Secure mode](#secure-mode)
+4. [Opting into secure mode](#opting-into-secure-mode)
+5. [New symbols](#new-symbols)
+6. [Adoption considerations](#adoption-considerations)
 
 # tl;dr
 
@@ -90,93 +92,80 @@ Example vulnerabilities include:
 We expect the number of vulnerable applications will grow as JavaScript applications are deployed to more environments (e.g. Electron, Cloudflare Workers, etc). Therefore, a language-level solution is required to mitigate attacks in all environments.
 
 # Proposal overview
-
 In the spirit of preventing unintentional changes to prototypes via dynamic access, this proposal puts forward two new concepts that complement each other and are meant to be adopted together: an opt-in secure mode that forbids code from referencing prototypes through dynamic access with string keys and a symbol that can be used by specialized applications to change prototypes dynamically in a secure way.
 
 Secure mode achieves two goals: it prevents any vulnerable code (for example, `deepCopy`/`deepMerge` functions) from unknowingly making changes to prototypes and it allows code that intentionally modifies prototypes (e.g. polyfills, reflection-heavy framework code) to continue working.
 
 # Secure mode
+In secure mode, it is no longer possible to reach the prototype using string property keys. This can be achieved by always providing secure alternatives like `Symbol.instanceProto` and `Symbol.ctor` and, when secure mode is enabled, deleting the __proto__ and constructor properties. Read more about these in the _New Symbols_ section.
 
-In secure mode, it is no longer possible to reach the prototype using string property keys.
+Secure mode is **not available** by default due to breakage potential in a small number of codebases that rely on computed access to prototypes and constructor. Whenever secure mode is enabled, it is applied globally to the JS runtime.
 
-There are two alternatives:
+This proposal introduces the concept of parse-time refactoring to maximize compatibility with as many codebases as possible, without requiring manual refactoring from them. This can be achieved by making JS engines rewrite all static usages (`object.__proto__` or `object.constructor`) to their refactoring counterparts (`object[Symbol.instanceProto]` or `object[Symbol.ctor]`) during the parsing phase. As a result, secure mode should only have breakage potential in codebases that rely on computed access, for example `obj[key]` where key is expected to be `__proto__` at runtime. Read more about this in the _parse-time automatic refactoring_ section.
 
-- **Option 1**: Delete the `__proto__` and `prototype` keys
-- **Option 2**: Delete the `__proto__` and `constructor` keys
+**Note on naming**: 'Secure mode' can be misinterpreted to mean 'all vulnerabilities have been removed' rather than 'this codebase is prototype pollution-free'. A more appropriate name for this mode should be chosen.
 
-Existing codebases that use either of these properties and that opt into secure mode must be refactored to use alternatives. Secure mode forces codebases to get an explicit prototype reference with `getPrototypeOf` before making any changes to it.
+# Opting into secure mode
 
-An important design question is what should be the mechanism to opt into secure mode. Some alternatives for this include:
+An important design question is what should be the mechanism to opt into secure mode. We recommend introducing an out-of-band mechanism, for example in the form of an HTTP header or command line flag. This option allows applications to enable/disable secure mode at any time without code changes and to roll out this feature gradually to their users, in a way that avoids breakages. This option is in line with other web platform mitigations, like CSP.
 
-- **Introduce an out-of-band mechanism to enable secure mode. For example, in the form of an HTTP header.**
-    - This option allows applications to enable/disable secure mode at any time without code changes and to roll out this feature gradually to their users, in a way that avoids breakages. This option is in line with other web platform mitigations.
-- **Introduce a `use secure-mode` directive or an `Object.enableSecureMode()` API that instructs JS engines to delete the prototype properties.**
-    - These options must be called as early as possible at runtime, because they change the semantics of accessors to prototypes.
-- **Enable secure mode when Symbol.proto/constructor is used at least once.**
-    - JS engines could enable secure mode when a piece of code makes use of the new symbols (see below). This would allow services to enable secure mode seamlessly, but it would not give them the ability to opt out without making production changes.
+Out of band triggers have the added benefit that all decisions needed to enable secure mode can be made before the JS runtime is created, effectively working around the 'freezing point' issues mentioned in the _Problems with existing mitigations_ section.
 
-Applications would also only be fully compatible once their codebase and all of their dependencies are refactored to use these symbols. Note that this hurdle can be fixed with automatic refactoring.
+## Alternatives considered:
+
+-   Introduce a `use secure-mode` directive or an `Object.enableSecureMode()` API that instructs JS engines to delete the prototype properties. This option is significantly more complex than out-of-band opt-ins, because it implies secure mode can be triggered at an arbitrary time during the runtime's lifecycle.
+    
+-   Enable secure mode when `Symbol.proto`/`constructor` is used at least once. This option is not compatible with bundled assets where a third party library opts into secure mode, but the rest of the code isn't compatible with it.
 
 # New Symbols
 
-Some codebases that opt into secure mode will still need to make changes to prototypes dynamically. To preserve backward compatibility for these cases, we propose creating a new symbol that can support these use cases. Unlike string keys, symbol values are harder to exploit. We propose two alternatives:
+We propose creating new symbols that can be used to provide a well-lit path to refactor codebases into being compatible. We choose symbols because, unlike string keys (which are often the type of data in which user input comes from), getting a hold of symbol values in an exploit is significantly more difficult. Exploits will require either additional vulnerabilities that can be chained together or some form of code execution. 
 
-## Option 1: `Symbol.proto`
+In total, two symbols are needed to stop object instances from reaching their prototypes. These symbols are simple accessors and as such should also be available when secure mode isn't enabled. This allows codebases that have been refactored to use the new symbols to continue working as intended and be backward compatible, either with browsers that don't support secure mode or because the opt in header is not present.
 
-Applications need access to both the internal `[[Prototype]]` slot and the `prototype` property. Since secure mode removes the `__proto__` and `prototype` properties, we will need to keep this parity. In secure mode, applications will get access to both of these by:
+## Symbol.instanceProto
 
-- Using `Object.getPrototypeOf` and `Reflect.getPrototypeOf`, which already give access to the `[[Prototype]]` internal slot, as described in this spec section.
-- Using `Symbol.proto` to get access to the `prototype` property, which corresponds to this spec section for Object, and equivalents for other types.
+This symbol is a drop in replacement for `__proto__`. Its name indicates that it is different from the prototype property.
 
-`__proto__` and `prototype` can differ in certain cases, which is why this symbol is needed.
+## Symbol.ctor
 
-Examples:
-
-```javascript
-const obj = {};
-obj[Symbol.proto] === undefined; // true because obj doesn't have a `prototype` prop.
-
-const arr = [];
-arr[Symbol.proto] === undefined; // true because arr doesn't have a `prototype` prop.
-
-function Foo() {}
-Foo[Symbol.proto] === Foo.prototype; // true
-Foo[Symbol.proto] === Foo.__proto__; // false because this is the [[Prototype]] prop.
-
-Object[Symbol.proto] === Object.prototype; // true
-Object[Symbol.proto] === Object.__proto__; // false because this is [[Prototype]]
-```
-
-## Option 2: `Symbol.constructor`
-
-In this alternative, codebases can still access the `prototype` property, but they can no longer access the `constructor` property. Any existing accesses to `constructor` will need to be replaced by `Symbol.constructor` or an equivalent mechanism (e.g. `Object.getConstructorOf`).
-
-This alternative provides the same security guarantees as option 1 because, apart from `__proto__`, exploits can only get a hold of prototypes through `object.constructor.prototype`. If the constructor property is no longer accessible, exploits of those vulnerabilities will break.
-
-The constructor property is part of some algorithms spec'd in ECMAScript, for example those in typed arrays. Under this proposal, the spec will need to be changed so that those algorithms can continue to work even when secure mode removes the constructor property.
+This symbol is a drop in replacement for the `constructor` property.
 
 # Adoption considerations
 
-## Making codebases secure by default with automatic refactoring
+## `IsConstructor` in other specifications
 
-The secure mode and symbol pair allows the majority of applications to eliminate prototype pollution without any code changes, because JS parsers/lexers can apply drop-in replacements for any code. Any JS parser/lexer, say in browser engines, can do this in three steps:
+Unfortunately, there are several specifications that rely on the [IsConstructor](https://tc39.es/ecma262/#sec-isconstructor) definition. This adds friction to removing the `constructor` property because even if an application's codebase doesn't use `constructor` anywhere, usages of the constructor property can still happen at runtime. 
 
-1. Find all **static** references of `__proto__` or `prototype`, for example `object.__proto__` or `Object.prototype`
-1. Replace each reference with its drop-in, secure alternative. For example, `Object.getPrototypeOf(object)` or `Object[Symbol.proto]`
-1. Delete the `__proto__` and `prototype` properties.
+Examples of these are [point 3](https://tc39.es/ecma262/#sec-arrayspeciescreate) of the `ArraySpeciesCreate` algorithm, which references the `constructor` property explicitly or [point 1](https://html.spec.whatwg.org/multipage/custom-elements.html#element-definition) of the custom elements in HTML. 
 
-This same algorithm applies for option 2, but in this case it is `constructor` references that get replaced. This means that codebase can continue using prototype/constructor properties transparently.
+## Parse-time automatic refactoring
 
-As JS engines and browsers are able to refactor applications on the fly to make them compatible with secure mode, there is potential to make codebases secure by default. We refer to this as automatic refactoring, which allows developers to opt into secure mode without making changes to their codebases, thereby securing them by default. This feature will remove most blockers for adoption, allowing legacy applications to get the security benefits with little to no engineering efforts.
+To maximize the number of codebases compatible with secure mode, we propose an algorithm to be implemented in browsers and other runtimes when secure mode is enabled. This algorithm should run during the JS parsing phase:
 
-A benefit of implementing this proposal on the browser (i.e. automatic refactoring) is that the proposed symbols don't need to be exposed to developers, making them effectively unutterable.
+1.  Find all static references to `__proto__`  and `constructor`, for example `object.__proto__`.
+    
+2.  Replace each of those references with its drop-in, secure alternative. For example, `object[Symbol.instanceProto]` or `object[Symbol.ctor]`
+    
+After these drop-in replacements, only code locations that access these properties dynamically will fail, e.g. `object[key]` where `key` is `__proto__` at runtime.
 
-## Need for supporting opting out of secure mode?
+While this refactoring isn't enough to enable secure mode by default for all applications, it significantly lowers the bar for adoption, as it allows developers to focus solely on cases that are, by definition, potentially vulnerable. The process of refactoring those cases is, in itself, a way to remove patterns that lead to pollution vulnerabilities.
 
-We expect the majority of codebases to be able to opt into secure mode without any code changes, since dynamic modifications to prototypes are not common. If this proposal is implemented without automatic refactoring, a small percentage of codebases will need to be refactored to be compatible with secure mode, by using one of the symbols above.
+## Computed access in minimized JS
 
-If a codebase that has been modified to use the new symbols wants to opt out of secure mode, the symbols will have to continue working as regular accessors to the prototype/constructor. This is to keep backward compatibility and give developers the flexibility to enter/exit secure mode without code changes.
+Some toolchains produce JS bundles that leverage computed access to minimize the size of the bundle. This is incompatible with parse-time automatic refactoring because it hides accesses to the `__proto__` or `constructor` using static analysis. We have queried the [HTTP Archive](http://httparchive.org) to get an estimate as to how common this pattern is. The following table shows that pages with this behavior are consistently below 1% throughout the last 12 months for all pages crawled with a desktop browser:
 
-Why would a codebase want to opt out of secure mode? Occasionally, mitigations in the web platform need to be rolled back because bugs or regressions in browsers can cause applications to break. Also, if secure mode is not fully compatible with either application code or third party dependencies, developers will want to revert opting into it.
-
-If this breakage potential doesn't apply to JS engines and opting out isn't a use case that needs to be explicitly supported, then the new symbols can be made such that they are only valid accessors in secure mode.
+| Table              | Documents accessing `__proto__` or `constructor` dynamically | Total number of crawled documents | Ratio |
+|--------------------|--------------------------------------------------------------|-----------------------------------|-------|
+| 2023_03_01_desktop |                                                    5,407,936 |                       609,469,458 | 0.89% |
+| 2023_02_01_desktop |                                                    4,842,383 |                       549,089,708 | 0.88% |
+| 2023_01_01_desktop |                                                    5,283,826 |                       589,519,160 | 0.90% |
+| 2022_12_01_desktop |                                                    5,161,471 |                       577,073,883 | 0.89% |
+| 2022_11_01_desktop |                                                    5,023,169 |                       561,726,239 | 0.89% |
+| 2022_10_01_desktop |                                                    4,393,377 |                       476,880,624 | 0.92% |
+| 2022_09_01_desktop |                                                    4,239,257 |                       466,278,762 | 0.91% |
+| 2022_08_01_desktop |                                                    4,259,814 |                       463,784,047 | 0.92% |
+| 2022_07_01_desktop |                                                    3,011,137 |                       339,468,615 | 0.89% |
+| 2022_06_01_desktop |                                                    2,301,317 |                       257,501,222 | 0.89% |
+| 2022_04_01_desktop |                                                    2,368,577 |                       263,144,657 | 0.90% |
+| 2022_03_01_desktop |                                                    2,319,518 |                       259,249,013 | 0.89% |
