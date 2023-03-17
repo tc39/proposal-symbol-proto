@@ -115,7 +115,7 @@ Out of band triggers have the added benefit that all decisions needed to enable 
 
 -   Introduce a `use secure-mode` directive or an `Object.enableSecureMode()` API that instructs JS engines to delete the prototype properties. This option is significantly more complex than out-of-band opt-ins, because it implies secure mode can be triggered at an arbitrary time during the runtime's lifecycle.
     
--   Enable secure mode when `Symbol.proto`/`constructor` is used at least once. This option is not compatible with bundled assets where a third party library opts into secure mode, but the rest of the code isn't compatible with it.
+-   Enable secure mode when `Symbol.instanceProto`/`ctor` is used at least once. This option is not compatible with bundled assets where a third party library opts into secure mode, but the rest of the code isn't compatible with it.
 
 # New Symbols
 
