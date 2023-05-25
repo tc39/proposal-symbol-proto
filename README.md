@@ -5,7 +5,7 @@
 
 **Champion**: Shu-yu Guo (Google)
 
-**Stage**: 0
+**Stage**: 1
 
 # TOC
 
